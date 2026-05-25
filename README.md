@@ -65,7 +65,87 @@ Todas essas configurações são feitas no arquivo de configuração do Nginx. E
 >[!NOTE] 
 Em ambientes com Docker, o arquivo de configuração é copiado para dentro do contêiner durante a construção da imagem. Caso prefira utilizar um servidor Nginx em uma instalação tradicional, salve o arquivo em `/etc/nginx/sites-available/`, crie um link simbólico em `/etc/nginx/sites-enabled/` com o comando `ln -s /etc/nginx/sites-available/load-balancer /etc/nginx/sites-enabled/load-balancer`, valide a sintaxe com `nginx -t` e recarregue o serviço com `systemctl reload nginx`.
 
-Com essa compreensão inicial sobre o tema, já somos capazes de implementar um balanceador de carga simples com identificação de endereços IP. No entanto, em cenários reais e mais complexos, como aplicações web modernas desenvolvidas em *frameworks* como React, é necessário adicionar configurações mais robustas que garantam o funcionamento correto da aplicação distribuída. Na próxima seção veremos a implementação de um balanceador de carga para uma aplicação React.
+Com essa compreensão inicial sobre o tema, já somos capazes de implementar um balanceador de carga simples com identificação de endereços IP. No entanto, em cenários reais e mais complexos, como aplicações web modernas desenvolvidas em *frameworks* como React, é necessário adicionar configurações mais robustas que garantam o funcionamento correto da aplicação distribuída. Na próxima seção veremos a implementação de um balanceador de carga para uma aplicação React.]
+
+No tutorial anterior sobre [Redirecionamento em Aplicações React](https://github.com/myNameIsV-sh/NginxAndTests/blob/main/redirecionamento_react.md), exploramos como o Nginx utiliza a diretiva `try_files` para resolver problemas de roteamento no lado do cliente com React Router. Dessa vez não será diferente, iremos manter essa diretiva, mas agora iremos adicionar **cinco** nós para o balanceamento de carga, manteremos também a identificação dos IPs por meio do `proxy_set_header X-Real-IP` visto anteriormente.
+
+## Balanceando uma aplicação React
+Primeiramente, iremos realizar o *build* da nossa aplicação React por meio do `npm run build`, para esse tutorial, irei utilizar o projeto React feito pelo o meu professor [Rhavy Maia](https://github.com/rhavymaia):
+```bash
+git clone https://github.com/rhavymaia/minhaappweb20252
+cd minhaappweb20252
+```
+Em seguida  instalamos todas as dependências e realizamos o *build* da aplicação:
+```bash
+npm install && npm run build
+```
+Após a execução, você terá um diretório `dist/` (ou `build/`, dependendo da configuração do projeto) contendo todos os arquivos estáticos compilados da sua aplicação React. Este diretório será copiado para dentro dos contêineres Docker dos nós que executarão a aplicação. Você verá algo similar à isso:
+```text
+v@hp-256r-g9:~/Projetos/LoadBalancer/minhaappweb20252$ ls -lh
+total 176K
+drwxrwxr-x   3 v v 4,0K mai 25 09:01 dist
+-rw-rw-r--   1 v v  763 mai 25 09:01 eslint.config.js
+-rw-rw-r--   1 v v  374 mai 25 09:01 index.html
+-rw-rw-r--   1 v v  430 mai 25 09:01 Jenkinsfile
+drwxrwxr-x 182 v v 4,0K mai 25 09:01 node_modules
+-rw-rw-r--   1 v v  944 mai 25 09:01 package.json
+-rw-rw-r--   1 v v 137K mai 25 09:01 package-lock.json
+-rw-rw-r--   1 v v 1,2K mai 25 09:01 README.md
+drwxrwxr-x   7 v v 4,0K mai 25 09:01 src
+-rw-rw-r--   1 v v  161 mai 25 09:01 vite.config.js
+```
+Com o projeto pronto, agora podemos focar nos arquivos de configuração do Nginx, fora do contêiner, vamos criar um arquivo `default.conf` para configurar o servidor com o `upstream`
+```nginx
+upstream react_app {
+    server localhost:3001;
+    server localhost:3002;
+    server localhost:3003;
+    server localhost:3004;
+    server localhost:3005;
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    location / {
+        proxy_pass http://react_app;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+>[!NOTE]
+>Além do `X-Real-IP`, existem outros cabeçalhos úteis para requisições de proxy: `X-Forwarded-For $proxy_add_x_forwarded_for` mantém um histórico de todos os IPs pelos quais a requisição passou, `X-Forwarded-Proto $scheme` preserva o protocolo original (HTTP ou HTTPS) da requisição, e `Host $host` garante que o cabeçalho `Host` original seja encaminhado aos nós backend. Estes podem ser adicionados conforme necessário em cenários mais complexos.
+
+Agora vamos criar o arquivo `nginx.conf` e adicionar uma inclusão (ou referência) ao `default.conf`, basta adicionar a linha `include /etc/nginx/conf.d/*.conf` no final do arquivo.
+```nginx
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log /var/log/nginx/access.log main;
+
+    sendfile on;
+    tcp_nopush on;
+    keepalive_timeout 65;
+    gzip on;
+
+    include /etc/nginx/conf.d/*.conf;
+}
+
 
 ### Referências
 GEEKSFORGEEKS. Using Nginx as HTTP Load Balancer. Disponível em: https://www.geeksforgeeks.org/devops/using-nginx-as-http-load-balancer/. Acesso em: 24 maio 2026.
